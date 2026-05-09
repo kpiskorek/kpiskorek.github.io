@@ -467,147 +467,258 @@
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-  // -------- Render --------
+  // -------- Render (first-person view) --------
   function render(dt) {
     if (canvas.clientWidth !== W || canvas.clientHeight !== H) resize();
     ctx.clearRect(0, 0, W, H);
 
-    // Sky gradient
-    const sky = ctx.createLinearGradient(0, 0, 0, H * 0.55);
+    const t = performance.now() / 1000;
+    const horizon = H * 0.40;
+
+    // Camera shake when line is under heavy tension
+    let shakeX = 0, shakeY = 0;
+    if (game.tension > 0.6) {
+      const s = (game.tension - 0.6) / 0.4;
+      shakeX = (Math.random() - 0.5) * s * 8;
+      shakeY = (Math.random() - 0.5) * s * 5;
+    } else if (game.state === STATES.BITE) {
+      shakeX = (Math.random() - 0.5) * 2;
+      shakeY = (Math.random() - 0.5) * 2;
+    }
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+
+    // Sky
+    const sky = ctx.createLinearGradient(0, 0, 0, horizon);
     sky.addColorStop(0, '#0c1836');
-    sky.addColorStop(0.6, '#1c3a6b');
+    sky.addColorStop(0.7, '#1c3a6b');
     sky.addColorStop(1, '#3a6ea8');
     ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, W, H * 0.55);
+    ctx.fillRect(-20, -20, W + 40, horizon + 20);
 
     // Sun
-    const sunY = H * 0.18;
+    const sunY = horizon - 60;
     const sunX = W * 0.78;
-    const sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 220);
+    const sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 240);
     sunGrad.addColorStop(0, 'rgba(255, 220, 130, 0.9)');
     sunGrad.addColorStop(0.4, 'rgba(255, 150, 90, 0.35)');
     sunGrad.addColorStop(1, 'rgba(255, 150, 90, 0)');
     ctx.fillStyle = sunGrad;
-    ctx.fillRect(0, 0, W, H * 0.6);
+    ctx.fillRect(0, 0, W, horizon + 20);
     ctx.beginPath();
-    ctx.arc(sunX, sunY, 28, 0, Math.PI * 2);
+    ctx.arc(sunX, sunY, 26, 0, Math.PI * 2);
     ctx.fillStyle = '#ffd07a';
     ctx.fill();
 
-    // Distant hills
+    // Distant shoreline at horizon
     ctx.fillStyle = '#0e2a44';
     ctx.beginPath();
-    ctx.moveTo(0, H * 0.55);
-    for (let x = 0; x <= W; x += 24) {
-      const y = H * 0.55 - 14 - Math.sin(x * 0.012) * 10 - Math.sin(x * 0.04 + 1) * 6;
+    ctx.moveTo(-20, horizon);
+    for (let x = -20; x <= W + 20; x += 24) {
+      const y = horizon - 10 - Math.sin(x * 0.012) * 8 - Math.sin(x * 0.04 + 1) * 5;
       ctx.lineTo(x, y);
     }
-    ctx.lineTo(W, H * 0.55);
+    ctx.lineTo(W + 20, horizon);
     ctx.closePath();
     ctx.fill();
 
-    // Water
-    const water = ctx.createLinearGradient(0, H * 0.55, 0, H);
-    water.addColorStop(0, '#1e6091');
-    water.addColorStop(1, '#061a2c');
+    // Water plane stretching toward camera
+    const water = ctx.createLinearGradient(0, horizon, 0, H);
+    water.addColorStop(0, '#2c7aab');
+    water.addColorStop(0.35, '#1a5982');
+    water.addColorStop(1, '#021527');
     ctx.fillStyle = water;
-    ctx.fillRect(0, H * 0.55, W, H * 0.45);
+    ctx.fillRect(-20, horizon, W + 40, H - horizon + 20);
 
-    // Water ripples
-    const t = performance.now() / 1000;
-    ctx.strokeStyle = 'rgba(180, 220, 255, 0.18)';
+    // Sun reflection on water
+    const refl = ctx.createLinearGradient(0, horizon, 0, H);
+    refl.addColorStop(0, 'rgba(255, 210, 130, 0.5)');
+    refl.addColorStop(1, 'rgba(255, 210, 130, 0)');
+    ctx.fillStyle = refl;
+    ctx.beginPath();
+    ctx.moveTo(sunX - 18, horizon);
+    ctx.lineTo(sunX + 18, horizon);
+    ctx.lineTo(sunX + 80, H);
+    ctx.lineTo(sunX - 80, H);
+    ctx.closePath();
+    ctx.fill();
+
+    // Water ripples with perspective: distant lines are tight, close ones spread out
+    ctx.strokeStyle = 'rgba(200, 230, 255, 0.18)';
     ctx.lineWidth = 1;
-    for (let i = 0; i < 18; i++) {
-      const yy = H * 0.56 + i * 14;
+    const ripples = 26;
+    for (let i = 0; i < ripples; i++) {
+      const p = i / (ripples - 1);              // 0 near horizon, 1 at viewer
+      const yy = horizon + Math.pow(p, 1.6) * (H - horizon);
+      const amp = 1 + p * 5;
+      const stride = 12 + p * 30;
       const off = Math.sin(t * 0.6 + i) * 8;
       ctx.beginPath();
-      ctx.moveTo(0, yy);
-      for (let x = 0; x <= W; x += 30) {
-        const y = yy + Math.sin((x + off) * 0.02 + t + i * 0.3) * 1.6;
+      ctx.moveTo(-20, yy);
+      for (let x = -20; x <= W + 20; x += stride) {
+        const y = yy + Math.sin((x + off) * (0.02 - p * 0.012) + t * (1 + p) + i * 0.3) * amp;
         ctx.lineTo(x, y);
       }
       ctx.stroke();
     }
 
-    // Boat / angler silhouette on the left
-    drawAngler();
-
-    // Bobber position depends on state
-    const rodTipX = 130, rodTipY = H * 0.30;
-    let bobX, bobY;
-    const surface = H * 0.56;
+    // Bobber position on the water plane in front of the camera.
+    // depth: 0 = at viewer's feet, 1 = at horizon. Convert to screen Y with a perspective curve.
+    let depth, bobX;
     if (game.state === STATES.IDLE) {
-      bobX = W * 0.55 + Math.sin(t * 0.8) * 10;
-      bobY = surface + Math.sin(t * 1.6) * 2;
+      depth = 0.62 + Math.sin(t * 0.5) * 0.02;
+      bobX = W * 0.5 + Math.sin(t * 0.8) * 36;
     } else if (game.state === STATES.BITE) {
-      bobX = W * 0.55 + Math.sin(t * 12) * 14;
-      bobY = surface + Math.sin(t * 18) * 5 + 4;
+      depth = 0.62;
+      bobX = W * 0.5 + Math.sin(t * 14) * 28;
     } else if (game.state === STATES.FIGHT) {
-      // Pulled around by fish; reels closer as HP drops
-      const reel = 1 - game.fishHp;
-      bobX = W * 0.55 - reel * (W * 0.30) + Math.sin(t * 4 + game.fishWiggle) * (18 + game.fishStrength * 12);
-      bobY = surface + Math.sin(t * 6) * (4 + game.tension * 8);
+      // Fish gets reeled closer as HP drops.
+      depth = 0.62 - (1 - game.fishHp) * 0.55;
+      bobX = W * 0.5 + Math.sin(t * 2.6 + game.fishWiggle) * (70 + game.fishStrength * 40);
     } else if (game.state === STATES.LANDED) {
-      bobX = rodTipX + 60;
-      bobY = surface - 30 - Math.min(40, game.stateTime * 80);
+      depth = Math.max(0.0, 0.10 - game.stateTime * 0.05);
+      bobX = W * 0.5;
     } else {
-      bobX = W * 0.55;
-      bobY = surface + Math.sin(t * 1.6) * 2;
+      depth = 0.62;
+      bobX = W * 0.5;
     }
 
-    // Splash on bite
+    const surfaceY = horizon + Math.pow(1 - depth, 1.6) * (H - horizon);
+    const closeness = 1 - depth;                 // 0 far, 1 near
+    const bobScale = 0.6 + closeness * 2.2;
+
+    // Bite jiggle on Y
+    let bobY = surfaceY;
+    if (game.state === STATES.BITE) bobY += Math.sin(t * 22) * 5;
+    if (game.state === STATES.FIGHT) bobY += Math.sin(t * 7) * (3 + game.tension * 6);
+    if (game.state === STATES.LANDED) bobY -= Math.min(60, game.stateTime * 90);
+
+    // Splash on bite (size scales with bobber distance)
     if (game.splash > 0) {
       ctx.strokeStyle = `rgba(220, 240, 255, ${game.splash})`;
       ctx.lineWidth = 2;
-      const rad = (1 - game.splash) * 60 + 6;
-      ctx.beginPath(); ctx.arc(bobX, surface, rad, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.arc(bobX, surface, rad * 0.6, 0, Math.PI * 2); ctx.stroke();
+      const rad = ((1 - game.splash) * 60 + 6) * bobScale;
+      ctx.beginPath(); ctx.arc(bobX, surfaceY, rad, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(bobX, surfaceY, rad * 0.6, 0, Math.PI * 2); ctx.stroke();
     }
 
-    // Fishing line (with sag depending on tension)
-    drawLine(rodTipX, rodTipY, bobX, bobY, game.tension);
-
-    // Bobber
-    drawBobber(bobX, bobY);
-
-    // Fish silhouette under bobber during fight
+    // Underwater fish silhouette during fight (visible just below the surface)
     if (game.state === STATES.FIGHT) {
-      drawFish(bobX + Math.cos(game.fishWiggle) * 30, bobY + 30 + Math.sin(t * 5) * 6, game.fishMass);
+      const fx = bobX + Math.cos(game.fishWiggle) * 36 * bobScale;
+      const fy = surfaceY + 18 * bobScale + Math.sin(t * 5) * 4;
+      drawFish(fx, fy, game.fishMass, false, bobScale * 0.9);
     }
+
+    // Compute rod tip position. Rod handle is bottom-right; tip arcs up and forward.
+    // Default tip near upper-center; bends toward the bobber under tension.
+    const handleX = W * 0.82;
+    const handleY = H + 40;
+    const buttX = W * 1.02;
+    const buttY = H + 80;
+    let baseTipX = W * 0.42;
+    let baseTipY = horizon - 40;
+    // Offset tip slightly toward bobber even at zero tension (lead direction).
+    baseTipX += (bobX - baseTipX) * 0.10;
+    // Add bend proportional to tension (up to ~75% of the way to the bobber).
+    const bend = Math.min(1, game.tension) * 0.75;
+    const tipX = baseTipX * (1 - bend) + bobX * bend;
+    const tipY = baseTipY * (1 - bend) + (bobY - 40) * bend;
+
+    // Fishing line from rod tip to bobber
+    drawLine(tipX, tipY, bobX, bobY, game.tension);
+
+    // Bobber (drawn at scale)
+    drawBobber(bobX, bobY, bobScale);
+
+    // Landed fish leaping out of the water
     if (game.state === STATES.LANDED) {
-      drawFish(bobX, bobY + 18, game.fishMass, true);
+      drawFish(bobX, bobY + 22 * bobScale, game.fishMass, true, bobScale);
     }
+
+    // Rod and hands in the foreground
+    drawRodFPV(buttX, buttY, handleX, handleY, tipX, tipY);
+
+    ctx.restore();
+
+    // Vignette
+    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.4, W / 2, H / 2, Math.max(W, H) * 0.7);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.45)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
 
     // Tension red flash overlay
     if (game.tension > 0.8) {
       const a = (game.tension - 0.8) / 0.2;
-      ctx.fillStyle = `rgba(239, 68, 68, ${a * 0.18})`;
+      ctx.fillStyle = `rgba(239, 68, 68, ${a * 0.22})`;
       ctx.fillRect(0, 0, W, H);
     }
   }
 
-  function drawAngler() {
-    // Boat
-    const cx = 90, cy = H * 0.58;
-    ctx.fillStyle = '#0a1726';
+  function drawRodFPV(buttX, buttY, handleX, handleY, tipX, tipY) {
+    // Sample the rod as a quadratic curve from butt -> handle -> tip,
+    // and stroke it as many short segments with a width that tapers toward the tip.
+    const cpX = handleX, cpY = handleY;          // mid control = handle area
+    const segs = 26;
+    ctx.lineCap = 'round';
+    let prevX = buttX, prevY = buttY;
+    for (let i = 1; i <= segs; i++) {
+      const u = i / segs;
+      // quadratic bezier from butt to tip with handle as control point
+      const x = (1 - u) * (1 - u) * buttX + 2 * (1 - u) * u * cpX + u * u * tipX;
+      const y = (1 - u) * (1 - u) * buttY + 2 * (1 - u) * u * cpY + u * u * tipY;
+      const w = 14 * (1 - u) + 1.6 * u;          // taper 14px -> 1.6px
+      ctx.strokeStyle = '#0e1420';
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(prevX, prevY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      // subtle highlight
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      ctx.lineWidth = Math.max(0.5, w - 8);
+      ctx.beginPath();
+      ctx.moveTo(prevX - 1, prevY - 1);
+      ctx.lineTo(x - 1, y - 1);
+      ctx.stroke();
+      prevX = x; prevY = y;
+    }
+
+    // Reel
+    ctx.fillStyle = '#0a0f18';
     ctx.beginPath();
-    ctx.moveTo(cx - 70, cy);
-    ctx.quadraticCurveTo(cx, cy + 32, cx + 70, cy);
-    ctx.lineTo(cx - 70, cy);
+    ctx.ellipse(handleX + 6, handleY - 6, 14, 10, -0.3, 0, Math.PI * 2);
     ctx.fill();
-    // Person
-    ctx.fillStyle = '#0a1726';
+    ctx.fillStyle = '#1e2a3d';
     ctx.beginPath();
-    ctx.arc(cx + 8, cy - 36, 9, 0, Math.PI * 2); // head
+    ctx.arc(handleX + 6, handleY - 6, 6, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillRect(cx + 2, cy - 28, 14, 28);       // body
-    // Rod
-    ctx.strokeStyle = '#1f2937';
-    ctx.lineWidth = 3;
+
+    // Hands gripping (two simple shapes)
+    drawHand(handleX - 20, handleY + 28, 0.45);
+    drawHand(handleX + 28, handleY + 6, -0.55);
+  }
+
+  function drawHand(x, y, rot) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    // forearm
+    ctx.fillStyle = '#1a2230';
     ctx.beginPath();
-    ctx.moveTo(cx + 20, cy - 18);
-    ctx.lineTo(130, H * 0.30);
-    ctx.stroke();
+    ctx.roundRect ? ctx.roundRect(-22, 4, 80, 26, 12) : ctx.rect(-22, 4, 80, 26);
+    ctx.fill();
+    // glove/hand
+    ctx.fillStyle = '#dab48a';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 22, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // thumb wrap
+    ctx.fillStyle = '#b9966f';
+    ctx.beginPath();
+    ctx.ellipse(8, -8, 10, 6, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   function drawLine(x1, y1, x2, y2, tension) {
@@ -623,26 +734,34 @@
     ctx.stroke();
   }
 
-  function drawBobber(x, y) {
-    // red top, white bottom
+  function drawBobber(x, y, scale) {
+    scale = scale || 1;
+    const r = 7 * scale;
+    const dy = 6 * scale;
     ctx.beginPath();
     ctx.fillStyle = '#ef4444';
-    ctx.arc(x, y - 6, 7, Math.PI, 0);
+    ctx.arc(x, y - dy, r, Math.PI, 0);
     ctx.fill();
     ctx.beginPath();
     ctx.fillStyle = '#f8fafc';
-    ctx.arc(x, y - 6, 7, 0, Math.PI);
+    ctx.arc(x, y - dy, r, 0, Math.PI);
     ctx.fill();
     ctx.strokeStyle = '#0c1a2b';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = Math.max(0.6, scale);
     ctx.beginPath();
-    ctx.arc(x, y - 6, 7, 0, Math.PI * 2);
+    ctx.arc(x, y - dy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    // antenna
+    ctx.beginPath();
+    ctx.moveTo(x, y - dy - r);
+    ctx.lineTo(x, y - dy - r - 8 * scale);
     ctx.stroke();
   }
 
-  function drawFish(x, y, mass, landed) {
-    const len = 30 + mass * 26;
-    const h = 12 + mass * 6;
+  function drawFish(x, y, mass, landed, scale) {
+    scale = scale || 1;
+    const len = (30 + mass * 26) * scale;
+    const h = (12 + mass * 6) * scale;
     ctx.save();
     ctx.translate(x, y);
     if (landed) ctx.rotate(-0.3);
@@ -653,14 +772,14 @@
     // Tail
     ctx.beginPath();
     ctx.moveTo(-len / 2, 0);
-    ctx.lineTo(-len / 2 - 14, -h);
-    ctx.lineTo(-len / 2 - 14, h);
+    ctx.lineTo(-len / 2 - 14 * scale, -h);
+    ctx.lineTo(-len / 2 - 14 * scale, h);
     ctx.closePath();
     ctx.fill();
     // Eye
     ctx.fillStyle = '#0c1a2b';
     ctx.beginPath();
-    ctx.arc(len / 2 - 6, -2, 1.6, 0, Math.PI * 2);
+    ctx.arc(len / 2 - 6 * scale, -2 * scale, Math.max(1, 1.6 * scale), 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
