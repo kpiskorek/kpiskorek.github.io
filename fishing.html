@@ -117,6 +117,22 @@
     pointer-events: none; opacity: 0; transition: opacity .25s;
   }
   .toast.show { opacity: 1; }
+  .tap-hint {
+    position: absolute; left: 50%; bottom: 22%;
+    transform: translateX(-50%);
+    padding: 10px 18px; border-radius: 999px;
+    background: rgba(8, 17, 28, 0.85); border: 1px solid #1e3553;
+    color: #cfe3ff; font-size: 13px; letter-spacing: 0.08em;
+    text-transform: uppercase; pointer-events: none;
+    display: none; animation: pulse 1.4s ease-in-out infinite;
+  }
+  .tap-hint.show { display: block; }
+  .tap-hint.active { background: rgba(74, 222, 128, 0.18); border-color: #4ade80; color: #d1fae5; }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.65; }
+    50% { opacity: 1; }
+  }
+  main.mobile-active { touch-action: none; -webkit-user-select: none; user-select: none; }
   .help {
     position: absolute; right: 14px; top: 14px;
     background: rgba(8, 17, 28, 0.82); border: 1px solid #1e3553;
@@ -137,6 +153,7 @@
     <h1>🎣 Zwift Fishing</h1>
     <span class="pill"><span id="bt-dot" class="dot"></span><span id="bt-label">Trainer not connected</span></span>
     <span class="spacer"></span>
+    <button id="btn-mobile" class="ghost" title="Tap-and-hold to pedal">Mobile mode</button>
     <button id="btn-keyboard" class="ghost" title="Test without a trainer">Keyboard mode</button>
     <button id="btn-connect">Connect trainer</button>
   </header>
@@ -150,6 +167,7 @@
       4. Don't snap the line: keep tension out of the red.
     </div>
     <div class="toast" id="toast"></div>
+    <div class="tap-hint" id="tap-hint">Tap &amp; hold anywhere to pedal</div>
     <div class="center-msg" id="center"></div>
     <div class="hud">
       <div class="panel" style="display:flex; gap:14px;">
@@ -189,7 +207,9 @@
     lastCrankTime: null,
     lastUpdate: 0,
     keyboardMode: false,
+    mobileMode: false,
   };
+  const touch = { active: false, pointers: new Set() };
 
   function setBtStatus(connected, label) {
     document.getElementById('bt-dot').classList.toggle('on', !!connected);
@@ -219,6 +239,7 @@
       ch.addEventListener('characteristicvaluechanged', onPowerMeasurement);
       await ch.startNotifications();
       trainer.keyboardMode = false;
+      setMobileMode(false);
       setBtStatus(true, device.name || 'Trainer connected');
       toast('Trainer connected. Pedal to start fishing.');
     } catch (err) {
@@ -264,7 +285,7 @@
 
   // Decay cadence when no updates arrive
   setInterval(() => {
-    if (!trainer.keyboardMode && performance.now() - trainer.lastUpdate > 2500) {
+    if (!trainer.keyboardMode && !trainer.mobileMode && performance.now() - trainer.lastUpdate > 2500) {
       trainer.cadence *= 0.7;
       if (trainer.cadence < 1) trainer.cadence = 0;
       if (performance.now() - trainer.lastUpdate > 4000) trainer.power = 0;
@@ -283,15 +304,82 @@
   document.getElementById('btn-connect').addEventListener('click', connectTrainer);
   document.getElementById('btn-keyboard').addEventListener('click', () => {
     trainer.keyboardMode = !trainer.keyboardMode;
+    if (trainer.keyboardMode) setMobileMode(false);
     setBtStatus(trainer.keyboardMode, trainer.keyboardMode ? 'Keyboard mode (SPACE = pedal)' : 'Trainer not connected');
     toast(trainer.keyboardMode ? 'Keyboard mode: hold SPACE to pedal.' : 'Keyboard mode off.');
   });
+  document.getElementById('btn-mobile').addEventListener('click', () => setMobileMode(!trainer.mobileMode));
+
+  // -------- Mobile / touch input --------
+  const mainEl = document.querySelector('main');
+  const tapHint = document.getElementById('tap-hint');
+
+  function setMobileMode(on) {
+    trainer.mobileMode = on;
+    if (on) {
+      trainer.keyboardMode = false;
+      mainEl.classList.add('mobile-active');
+      tapHint.classList.add('show');
+      setBtStatus(true, 'Mobile mode (tap & hold to pedal)');
+      toast('Mobile mode: tap and hold the screen to pedal.');
+    } else {
+      mainEl.classList.remove('mobile-active');
+      tapHint.classList.remove('show', 'active');
+      touch.active = false;
+      touch.pointers.clear();
+      setBtStatus(false, 'Trainer not connected');
+    }
+  }
+
+  function isInteractiveTarget(t) {
+    if (!t) return false;
+    return !!t.closest('button, .panel, .help, header');
+  }
+
+  function onPointerDown(e) {
+    if (!trainer.mobileMode) return;
+    if (isInteractiveTarget(e.target)) return;
+    e.preventDefault();
+    touch.pointers.add(e.pointerId);
+    touch.active = true;
+    tapHint.classList.add('active');
+    if (mainEl.setPointerCapture) {
+      try { mainEl.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+  }
+  function onPointerUp(e) {
+    if (!trainer.mobileMode) return;
+    touch.pointers.delete(e.pointerId);
+    if (touch.pointers.size === 0) {
+      touch.active = false;
+      tapHint.classList.remove('active');
+    }
+  }
+  mainEl.addEventListener('pointerdown', onPointerDown);
+  mainEl.addEventListener('pointerup', onPointerUp);
+  mainEl.addEventListener('pointercancel', onPointerUp);
+  mainEl.addEventListener('pointerleave', onPointerUp);
+
+  // Auto-suggest mobile mode on touch-only devices
+  if (window.matchMedia && window.matchMedia('(pointer: coarse) and (hover: none)').matches) {
+    setMobileMode(true);
+  }
 
   function tickKeyboard(dt) {
     if (!trainer.keyboardMode) return;
     const target = keys.space ? 240 : 0;
     trainer.power += (target - trainer.power) * Math.min(1, dt * 3);
     const targetCad = keys.space ? 95 : 0;
+    trainer.cadence += (targetCad - trainer.cadence) * Math.min(1, dt * 2.5);
+  }
+
+  function tickTouch(dt) {
+    if (!trainer.mobileMode) return;
+    // Holding multiple fingers ramps higher (rewards "harder" tapping)
+    const intensity = Math.min(2, touch.pointers.size || (touch.active ? 1 : 0));
+    const target = touch.active ? 200 + intensity * 60 : 0;          // up to ~320W
+    trainer.power += (target - trainer.power) * Math.min(1, dt * 3);
+    const targetCad = touch.active ? 85 + intensity * 10 : 0;        // up to ~105 rpm
     trainer.cadence += (targetCad - trainer.cadence) * Math.min(1, dt * 2.5);
   }
 
@@ -395,6 +483,7 @@
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     tickKeyboard(dt);
+    tickTouch(dt);
     update(dt);
     render(dt);
     requestAnimationFrame(frame);
